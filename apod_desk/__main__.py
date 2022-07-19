@@ -32,9 +32,9 @@ from PyObjCTools import AppHelper
 log = None
 last_pic_files = {}
 sleep_t = 600
-NASA_API_KEY = os.getenv(NASA_API_KEY, "")
-
 ua = UserAgent()
+NASA_API_KEY = ""
+
 
 def build_logger(tty=True, name=__name__):
     logging.basicConfig(format="%(message)s", stream=sys.stdout)
@@ -378,9 +378,14 @@ def set_desktop_image_by_notification(obj, notification):
 
 
 def main():
-    global log
+    global log, NASA_API_KEY
 
     load_dotenv()
+
+    NASA_API_KEY = os.getenv("NASA_API_KEY", "")
+
+    if not NASA_API_KEY:
+        raise ValueError("NASA_API_KEY is not set to a valid API key")
 
     log = build_logger(name="apod_desk")
 
