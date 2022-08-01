@@ -1,0 +1,20 @@
+[tool.poetry]
+name = "apod"
+version = "0.1.0"
+description = ""
+authors = ["Richard Sarkis <rich@sark.is>"]
+
+[tool.poetry.dependencies]
+python = "^3.7"
+pyobjc = "^8.5"
+Pillow = "^9.1.0"
+requests = "^2.25.0"
+structlog = "^21.5.0"
+fake-useragent = "^0.1.11"
+python-dotenv = "^0.20.0"
+
+[tool.poetry.dev-dependencies]
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
