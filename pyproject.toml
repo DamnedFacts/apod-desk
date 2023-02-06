@@ -5,13 +5,13 @@ description = ""
 authors = ["Richard Sarkis <rich@sark.is>"]
 
 [tool.poetry.dependencies]
-python = "^3.7"
-pyobjc = "^8.5"
-Pillow = "^9.1.0"
-requests = "^2.25.0"
-structlog = "^21.5.0"
-fake-useragent = "^0.1.11"
-python-dotenv = "^0.20.0"
+python = "^3.8"
+pyobjc = "^9.0.1"
+Pillow = "^9.4.0"
+requests = "^2.28.2"
+structlog = "^22.3.0"
+fake-useragent = "^1.1.1"
+python-dotenv = "^0.21.1"
 
 [tool.poetry.dev-dependencies]
 
