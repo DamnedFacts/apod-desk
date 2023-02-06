@@ -1,3 +1,5 @@
+"""Astronomy Picture of the Day Mac Desktop Setter"""
+
 #!/usr/bin/env python3
 
 import json
@@ -12,12 +14,10 @@ from random import randrange
 from tempfile import NamedTemporaryFile
 from dotenv import load_dotenv
 
-import objc
 from fake_useragent import UserAgent
 import requests
 import structlog
 from AppKit import (
-    NSApp,
     NSApplication,
     NSBundle,
     NSObject,
