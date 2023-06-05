@@ -3069,14 +3069,14 @@ pyobjc-framework-Cocoa = ">=9.1.1"
 
 [[package]]
 name = "python-dotenv"
-version = "0.21.1"
+version = "1.0.0"
 description = "Read key-value pairs from a .env file and set them as environment variables"
 category = "main"
 optional = false
-python-versions = ">=3.7"
+python-versions = ">=3.8"
 files = [
-    {file = "python-dotenv-0.21.1.tar.gz", hash = "sha256:1c93de8f636cde3ce377292818d0e440b6e45a82f215c3744979151fa8151c49"},
-    {file = "python_dotenv-0.21.1-py3-none-any.whl", hash = "sha256:41e12e0318bebc859fcc4d97d4db8d20ad21721a6aa5047dd59f090391cb549a"},
+    {file = "python-dotenv-1.0.0.tar.gz", hash = "sha256:a8df96034aae6d2d50a4ebe8216326c61c3eb64836776504fcca410e5937a3ba"},
+    {file = "python_dotenv-1.0.0-py3-none-any.whl", hash = "sha256:f5971a9226b701070a4bf2c38c89e5a3f0d64de8debda981d1db98583009122a"},
 ]
 
 [package.extras]
@@ -3106,14 +3106,14 @@ use-chardet-on-py3 = ["chardet (>=3.0.2,<6)"]
 
 [[package]]
 name = "structlog"
-version = "22.3.0"
+version = "23.1.0"
 description = "Structured Logging for Python"
 category = "main"
 optional = false
 python-versions = ">=3.7"
 files = [
-    {file = "structlog-22.3.0-py3-none-any.whl", hash = "sha256:b403f344f902b220648fa9f286a23c0cc5439a5844d271fec40562dbadbc70ad"},
-    {file = "structlog-22.3.0.tar.gz", hash = "sha256:e7509391f215e4afb88b1b80fa3ea074be57a5a17d794bd436a5c949da023333"},
+    {file = "structlog-23.1.0-py3-none-any.whl", hash = "sha256:79b9e68e48b54e373441e130fa447944e6f87a05b35de23138e475c05d0f7e0e"},
+    {file = "structlog-23.1.0.tar.gz", hash = "sha256:270d681dd7d163c11ba500bc914b2472d2b50a8ef00faa999ded5ff83a2f906b"},
 ]
 
 [package.extras]
@@ -3159,4 +3159,4 @@ testing = ["big-O", "flake8 (<5)", "jaraco.functools", "jaraco.itertools", "more
 [metadata]
 lock-version = "2.0"
 python-versions = "^3.8"
-content-hash = "bfa840d9ee7143973b76995cf1ba44aaeab2f6c333c9520d9c0e9cd743c800ed"
+content-hash = "e3fe8816416e6677a7264a0c7c012d46539fcc81b807664e5acd999155557994"

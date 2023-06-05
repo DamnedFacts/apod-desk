@@ -316,6 +316,7 @@ def set_desktop_image_periodically(obj, notification):
 
     while True:
         log.info("-- MARK --")
+
         url_params = [("api_key", NASA_API_KEY), ("hd", True)]
 
         year = randrange(1997, this_year + 1)
@@ -346,7 +347,7 @@ def set_desktop_image_periodically(obj, notification):
                         "Pausing for before next image.", sleep_time=sleep_t
                     )
                     break
-            elif response.status_code == 429:
+            elif response.status_code in (429, 503):
                 backoff_sleep = 900
                 log.warn(
                     "Too many requests error received, pausing",
@@ -362,6 +363,12 @@ def set_desktop_image_periodically(obj, notification):
         ):
             log.warn(
                 "Conection error, or timeout, sleeping before retry",
+                sleep=sleep_t,
+            )
+            time.sleep(sleep_t)
+        except Exception as e:
+            log.warn(
+                f"Unhandled exception occurred ({e}): sleeping before retry",
                 sleep=sleep_t,
             )
             time.sleep(sleep_t)
