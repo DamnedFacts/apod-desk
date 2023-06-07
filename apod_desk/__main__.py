@@ -327,7 +327,6 @@ def set_desktop_image_periodically(obj, notification):
 
         url_params.append(date_param)
         apod_url = construct_url(base_url, url_params)
-
         try:
             headers = {
                 'User-Agent': ua.random
@@ -347,10 +346,9 @@ def set_desktop_image_periodically(obj, notification):
                         "Pausing for before next image.", sleep_time=sleep_t
                     )
                     break
-            elif response.status_code in (429, 503):
+            elif response.status_code != 200:
                 backoff_sleep = 900
-                log.warn(
-                    "Too many requests error received, pausing",
+                log.warn(f"An unexpected server response was received: {response.status_code}",
                     sleep=backoff_sleep,
                 )
                 time.sleep(backoff_sleep)
