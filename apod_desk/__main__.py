@@ -348,9 +348,10 @@ def set_desktop_image_periodically(obj, notification):
                     break
             elif response.status_code != 200:
                 backoff_sleep = 900
-                log.warn(f"An unexpected server response was received: {response.status_code}",
-                    sleep=backoff_sleep,
-                )
+                log.warn("An unexpected server response was received",
+                         sleep=backoff_sleep, status_code=response.status_code,
+                         url=apod_url
+                         )
                 time.sleep(backoff_sleep)
         except KeyError:
             log.warn("No high definition image available, skipping.")
