@@ -354,7 +354,7 @@ def set_desktop_image_periodically(obj, notification):
                          )
                 time.sleep(backoff_sleep)
         except KeyError:
-            log.warn("No high definition image available, skipping.")
+            log.warn("No high definition image available, skipping.", url=apod_url)
             #  time.sleep(10)
         except (
             requests.exceptions.ConnectionError,
@@ -362,13 +362,13 @@ def set_desktop_image_periodically(obj, notification):
         ):
             log.warn(
                 "Conection error, or timeout, sleeping before retry",
-                sleep=sleep_t,
+                sleep=sleep_t, url=apod_url
             )
             time.sleep(sleep_t)
         except Exception as e:
             log.warn(
                 f"Unhandled exception occurred ({e}): sleeping before retry",
-                sleep=sleep_t,
+                sleep=sleep_t, url=apod_url
             )
             time.sleep(sleep_t)
 
