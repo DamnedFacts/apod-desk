@@ -1,7 +1,9 @@
-"""Astronomy Picture of the Day Mac Desktop Setter"""
-
 #!/usr/bin/env python3
 
+"""Astronomy Picture of the Day Mac Desktop Setter."""
+
+
+import argparse
 import json
 import logging
 import os
@@ -13,10 +15,11 @@ from io import BytesIO
 from random import randrange
 from tempfile import NamedTemporaryFile
 from dotenv import load_dotenv
-
+from typing import Dict, Any, List
 from fake_useragent import UserAgent
 import requests
 import structlog
+from structlog import wrap_logger
 from AppKit import (
     NSApplication,
     NSBundle,
@@ -26,11 +29,35 @@ from AppKit import (
     NSWorkspace,
 )
 from Foundation import NSURL
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageFont, ImageDraw, ImageStat, ImageOps, ImageFilter
 from PyObjCTools import AppHelper
 
-log = None
-last_pic_files = {}
+# Define command-line arguments
+parser = argparse.ArgumentParser(description='NASA APOD Desktop')
+group = parser.add_mutually_exclusive_group()
+group.add_argument('--color_avg',
+                   type=float,
+                   nargs='?',
+                   const=0.1,
+                   default=argparse.SUPPRESS,
+                   help='Enable color averaging with an optional value that represents the percent of the image from the image edge to use for color averaging. Default value if no value is provided is 10%')
+group.add_argument('--mirror_blur',
+                   action='store_true',
+                   help='Enable mirroring and blurring of the image for the bars')
+parser.add_argument('--resize_to_fit',
+                    action='store_true',
+                    help='Enable resize-to-fit of the image such that the longest dimension is proportionally shrunk to fit within the screen\'s resolution')
+
+# Parse the command-line arguments
+args = parser.parse_args()
+# Setup logging
+logging.basicConfig(level=logging.DEBUG)
+log = wrap_logger(logging.getLogger(__name__), processors=[
+                  structlog.processors.JSONRenderer()])
+
+# Global to store image file paths
+last_pic_files: Dict[int, Dict[str, Any]] = {}
+
 sleep_t = 600
 ua = UserAgent()
 NASA_API_KEY = ""
@@ -90,8 +117,11 @@ def construct_url(base, params):
     return url
 
 
-def set_desktop_image_cocoa(img_file, screen, options=None):
-    file_url = NSURL.fileURLWithPath_(img_file.name)
+def set_desktop_image_cocoa(img_file: str, screen: Any, options: Dict[str, Any] | None = None) -> None:
+    if not options:
+        options = {}
+
+    file_url = NSURL.fileURLWithPath_(img_file)
 
     # tell the workspace to set the desktop picture
     (
@@ -104,71 +134,133 @@ def set_desktop_image_cocoa(img_file, screen, options=None):
         log.error(error, img=img_file, screen=screen)
 
 
-def set_desktop_image(img, img_desc):
-    # make image options dictionary
-    # we just make an empty one because the defaults are fine
+def set_desktop_image(img: Image, img_desc: str) -> None:
     options = {}
-    img_files = {}
+    img_files: Dict[int, Dict[str, Any]] = {}
 
-    # iterate over all screens
+    times_font = ImageFont.truetype("Times.ttc", 22)
+
     for screen in NSScreen.screens():
         screen_id = screen.deviceDescription()["NSScreenNumber"]
-        sc_width, sc_height = (
-            screen.frame().size.width,
-            screen.frame().size.height,
-        )
+        sc_width, sc_height = screen.frame().size.width, screen.frame().size.height
         (im_width, im_height) = img.size
 
-        log.info(
-            "Scaling image for display id",
-            screen_id=screen_id,
-            width=sc_width,
-            height=sc_height,
-        )
-        ratio = max(sc_width / im_width, sc_height / im_height)
+        log.info("Scaling image for display id", screen_id=screen_id,
+                 width=sc_width, height=sc_height)
+
+        fills_width = fills_height = False
+
+        if ('resize_to_fit' in args and args.resize_to_fit) or 'mirror_blur' in args or 'color_avg' in args:
+            if im_width / im_height > sc_width / sc_height:
+                # Image aspect ratio is wider than the screen's aspect ratio
+                ratio = sc_width / im_width
+                fills_width = True
+            else:
+                # Image aspect ratio is taller than the screen's aspect ratio
+                ratio = sc_height / im_height
+                fills_height = True
+        else:
+            ratio = max(sc_width / im_width, sc_height / im_height)
+
         try:
             img_2 = img.resize(
-                (int(im_width * ratio), int(im_height * ratio)),
-                resample=Image.Resampling.LANCZOS,
-            )
+                (int(im_width * ratio), int(im_height * ratio)), resample=Image.Resampling.LANCZOS)
         except OSError as e:
             log.error("Encountered exception", exc=str(e).strip())
             return
 
-        img_2 = img_2.crop(box=(0, 0, sc_width, sc_height))
         new_w = img_2.size[0]
         new_h = img_2.size[1]
-        log.info(
-            "Image dimensions scaled and cropped",
-            ratio=ratio,
-            width=new_w,
-            height=new_h,
-        )
+        log.info("Image dimensions scaled",
+                 ratio=ratio, width=new_w, height=new_h)
 
-        draw = ImageDraw.Draw(img_2)
-        draw.text(
-            (new_w * 0.05, new_h * 0.95),
-            img_desc,
-            font=ImageFont.truetype("Times.ttc", 22),
-            fill="rgb(255, 255, 255)",
-            stroke_width=2,
-            stroke_fill="black",
-        )
+        final_img = Image.new("RGB", (int(sc_width), int(sc_height)))
+
+        edge_boxes_and_positions = []
+        if 'color_avg' in args:
+            edge_width = int(min(new_w, new_h) * args.color_avg)
+            if not fills_height:
+                edge_boxes_and_positions.extend([
+                    ((0, 0, new_w, edge_width), "top"),
+                    ((0, new_h - edge_width, new_w, new_h), "bottom")
+                ])
+            if not fills_width:
+                edge_boxes_and_positions.extend([
+                    ((0, 0, edge_width, new_h), "left"),
+                    ((new_w - edge_width, 0, new_w, new_h), "right")
+                ])
+        elif 'mirror_blur' in args and args.mirror_blur:
+            edge_width = (int(sc_height) -
+                          new_h) // 2 if not fills_height else 0
+            edge_height = (int(sc_width) -
+                           new_w) // 2 if not fills_width else 0
+            if edge_width > 0:
+                edge_boxes_and_positions.extend([
+                    ((0, 0, new_w, edge_width), "top"),
+                    ((0, new_h - edge_width, new_w, new_h), "bottom")
+                ])
+            if edge_height > 0:
+                edge_boxes_and_positions.extend([
+                    ((0, 0, edge_height, new_h), "left"),
+                    ((new_w - edge_height, 0, new_w, new_h), "right")
+                ])
+
+        draw = ImageDraw.Draw(final_img)
+
+        for box, position in edge_boxes_and_positions:
+            if 'color_avg' in args:
+                edge_img = img_2.crop(box)
+                avg_color = ImageStat.Stat(edge_img).mean
+                avg_color = tuple(map(int, avg_color))
+            elif 'mirror_blur' in args and args.mirror_blur:
+                edge_img = img_2.crop(box)
+                if position in ["top", "bottom"]:
+                    edge_img = ImageOps.flip(edge_img)
+                else:
+                    edge_img = ImageOps.mirror(edge_img)
+                edge_img = edge_img.filter(ImageFilter.GaussianBlur(radius=50))
+
+            if position == "top":
+                draw.rectangle([(0, 0), (int(sc_width), (int(
+                    sc_height) - new_h) // 2)], fill=avg_color if 'color_avg' in args else None)
+                if 'mirror_blur' in args and args.mirror_blur:
+                    final_img.paste(edge_img, (0, 0))
+            elif position == "bottom":
+                draw.rectangle([(0, int(sc_height) + (int(sc_height) - new_h) // 2), (int(
+                    sc_width), int(sc_height))], fill=avg_color if 'color_avg' in args else None)
+                if 'mirror_blur' in args and args.mirror_blur:
+                    final_img.paste(edge_img, (0, int(sc_height) - edge_width))
+            elif position == "left":
+                draw.rectangle([(0, 0), ((int(sc_width) - new_w) // 2, int(sc_height))],
+                               fill=avg_color if 'color_avg' in args else None)
+                if 'mirror_blur' in args and args.mirror_blur:
+                    final_img.paste(edge_img, (0, 0))
+            elif position == "right":
+                draw.rectangle([((int(sc_width) + new_w) // 2, 0), (int(sc_width),
+                               int(sc_height))], fill=avg_color if 'color_avg' in args else None)
+                if 'mirror_blur' in args and args.mirror_blur:
+                    final_img.paste(
+                        edge_img, ((int(sc_width) + new_w) // 2, 0))
+
+        final_img.paste(img_2, ((int(sc_width) - new_w) //
+                        2, (int(sc_height) - new_h) // 2))
+
+        draw = ImageDraw.Draw(final_img)
+        draw.text((new_w * 0.05, new_h * 0.95), img_desc, font=times_font,
+                  fill="rgb(255, 255, 255)", stroke_width=2, stroke_fill="black")
 
         img_file = NamedTemporaryFile(suffix="*.png", delete=True)
-        img_2.convert("RGB").save(img_file, format="PNG")  # for CYMK
+        final_img.convert("RGB").save(img_file, format="PNG")  # for CYMK
         img_file.flush()
 
-        set_desktop_image_cocoa(img_file, screen, options)
+        set_desktop_image_cocoa(img_file.name, screen, options)
 
         img_files[screen_id] = {
             "file": img_file,
-            "img": img_2,
+            "img": final_img,
             "desc": img_desc,
         }
 
-    # You can't close, and delete the file before the next one
-    # or else macOS will revert to the standard desktop image.
     for screen_id in list(last_pic_files):
         pic = last_pic_files[screen_id]
         if pic["file"] and not pic["file"].closed:
@@ -311,6 +403,16 @@ def retrieve_image(img_url, img_desc):
 
 
 def set_desktop_image_periodically(obj, notification):
+    """
+    Sets the desktop image for all screens.
+
+    Parameters:
+    img (PIL.Image): The image to set as the desktop image.
+    img_desc (str): The description to draw on the image.
+    font_path (str): The path to the font to use for the description text. Default is "Times.ttc".
+    font_size (int): The font size to use for the description text. Default is 22.
+    """
+
     this_year = date.today().year
     base_url = "https://api.nasa.gov/planetary/apod"
 
@@ -378,7 +480,8 @@ def set_desktop_image_by_notification(obj, notification):
     for screen in NSScreen.screens():
         screen_id = screen.deviceDescription()["NSScreenNumber"]
         if screen_id in last_pic_files:
-            set_desktop_image_cocoa(last_pic_files[screen_id]["file"], screen)
+            set_desktop_image_cocoa(
+                last_pic_files[screen_id]["file"].name, screen)
         else:
             set_desktop_image_periodically(None, None)
 

@@ -7,7 +7,7 @@ authors = ["Richard Sarkis <rich@sark.is>"]
 [tool.poetry.dependencies]
 python = "^3.8"
 pyobjc = "^9.2"
-Pillow = "^9.5.0"
+Pillow = "^10.0.0"
 requests = "^2.31.0"
 structlog = "^23.1.0"
 fake-useragent = "^1.1.3"
