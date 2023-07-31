@@ -32,39 +32,18 @@ from Foundation import NSURL
 from PIL import Image, ImageFont, ImageDraw, ImageStat, ImageOps, ImageFilter
 from PyObjCTools import AppHelper
 
-# Define command-line arguments
-parser = argparse.ArgumentParser(description='NASA APOD Desktop')
-group = parser.add_mutually_exclusive_group()
-group.add_argument('--color_avg',
-                   type=float,
-                   nargs='?',
-                   const=0.1,
-                   default=argparse.SUPPRESS,
-                   help='Enable color averaging with an optional value that represents the percent of the image from the image edge to use for color averaging. Default value if no value is provided is 10%')
-group.add_argument('--mirror_blur',
-                   action='store_true',
-                   help='Enable mirroring and blurring of the image for the bars')
-parser.add_argument('--resize_to_fit',
-                    action='store_true',
-                    help='Enable resize-to-fit of the image such that the longest dimension is proportionally shrunk to fit within the screen\'s resolution')
-
-# Parse the command-line arguments
-args = parser.parse_args()
-# Setup logging
-logging.basicConfig(level=logging.DEBUG)
-log = wrap_logger(logging.getLogger(__name__), processors=[
-                  structlog.processors.JSONRenderer()])
-
 # Global to store image file paths
 last_pic_files: Dict[int, Dict[str, Any]] = {}
 
+args = None
+log = None
 sleep_t = 600
 ua = UserAgent()
 NASA_API_KEY = ""
 
 
 def build_logger(tty=True, name=__name__):
-    logging.basicConfig(format="%(message)s", stream=sys.stdout)
+    logging.basicConfig(format="%(message)s", stream=sys.stdout, level=logging.INFO)
 
     def logger_factory():
         logger = logging.getLogger(name)
@@ -487,7 +466,31 @@ def set_desktop_image_by_notification(obj, notification):
 
 
 def main():
-    global log, NASA_API_KEY
+    global args, log, NASA_API_KEY
+
+    # Define command-line arguments
+    parser = argparse.ArgumentParser(description='NASA APOD Desktop')
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument('--color_avg',
+                       type=float,
+                       nargs='?',
+                       const=0.1,
+                       default=argparse.SUPPRESS,
+                       help=('Enable color averaging with an optional value '
+                             'that represents the percent of the image from '
+                             'the image edge to use for color averaging. '
+                             'Default value if no value is provided is 10%'))
+    group.add_argument('--mirror_blur',
+                       action='store_true',
+                       help='Enable mirroring and blurring of the image for the bars')
+    parser.add_argument('--resize_to_fit',
+                        action='store_true',
+                        help='Enable resize-to-fit of the image such that the '
+                             'longest dimension is proportionally shrunk to '
+                             'fit within the screen\'s resolution')
+
+    # Parse the command-line arguments
+    args = parser.parse_args()
 
     load_dotenv()
 
