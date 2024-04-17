@@ -6,12 +6,12 @@ authors = ["Richard Sarkis <rich@sark.is>"]
 
 [tool.poetry.dependencies]
 python = "^3.8"
-pyobjc = "^9.2"
-Pillow = "^10.1.0"
+pyobjc = "^10.2"
+Pillow = "^10.3.0"
 requests = "^2.31.0"
-structlog = "^23.2.0"
-fake-useragent = "^1.4.0"
-python-dotenv = "^1.0.0"
+structlog = "^24.1.0"
+fake-useragent = "^1.5.1"
+python-dotenv = "^1.0.1"
 
 [tool.poetry.dev-dependencies]
 
