@@ -12,6 +12,7 @@ import sys
 import time
 from datetime import date
 from io import BytesIO
+from enum import Enum
 from random import randrange
 from tempfile import NamedTemporaryFile
 from dotenv import load_dotenv
@@ -41,6 +42,22 @@ sleep_t = 600
 ua = UserAgent()
 NASA_API_KEY = ""
 
+class APODResult(Enum):
+    SUCCESS = 0
+    HTTP_NON_SUCCESS = 11
+    HTTP_CONNECTION_ERROR = 12
+    UNEXPECTED_ERROR = 100
+
+def retry_after_delay(delay, retry_function, *args, **kwargs):
+    def retry_wrapper():
+        retry_function(*args, **kwargs)
+
+    # Offload to a background thread with delay
+    objc.dispatch_after(
+        objc.dispatch_time(0, delay * 1_000_000_000),
+        objc.dispatch_get_global_queue(0, 0),
+        retry_wrapper
+    )
 
 def build_logger(tty=True, name=__name__):
     logging.basicConfig(format="%(message)s", stream=sys.stdout, level=logging.INFO)
@@ -426,17 +443,15 @@ def set_desktop_image_periodically(obj, notification):
                     log.info(
                         "Pausing for before next image.", sleep_time=sleep_t
                     )
-                    break
+                    return APODResult.SUCCESS
             elif response.status_code != 200:
-                backoff_sleep = 900
                 log.warn("An unexpected server response was received",
                          sleep=backoff_sleep, status_code=response.status_code,
                          url=apod_url
                          )
-                time.sleep(backoff_sleep)
+                return APODResult.HTTP_NON_SUCCESS
         except KeyError:
             log.warn("No high definition image available, skipping.", url=apod_url)
-            #  time.sleep(10)
         except (
             requests.exceptions.ConnectionError,
             requests.exceptions.ReadTimeout,
@@ -445,13 +460,13 @@ def set_desktop_image_periodically(obj, notification):
                 "Conection error, or timeout, sleeping before retry",
                 sleep=sleep_t, url=apod_url
             )
-            time.sleep(sleep_t)
+            return APODResult.HTTP_CONNECTION_ERROR
         except Exception as e:
             log.warn(
-                f"Unhandled exception occurred ({e}): sleeping before retry",
-                sleep=sleep_t, url=apod_url
+                f"Unhandled exception occurred, sleeping before retry",
+                sleep=sleep_t, url=apod_url, exc=e
             )
-            time.sleep(sleep_t)
+            return APODResult.UNEXPECTED_ERROR
 
 
 def set_desktop_image_by_notification(obj, notification):
