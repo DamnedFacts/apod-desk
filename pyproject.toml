@@ -5,9 +5,9 @@ description = ""
 authors = ["Richard Sarkis <rich@sark.is>"]
 
 [tool.poetry.dependencies]
-python = "^3.8"
+python = "^3.9"
 pyobjc = "^10.3.1"
-Pillow = "^10.4.0"
+Pillow = "^11.0.0"
 requests = "^2.32.3"
 structlog = "^24.4.0"
 fake-useragent = "^1.5.1"
