@@ -1,20 +1,21 @@
-[tool.poetry]
+[project]
 name = "apod"
 version = "0.1.0"
 description = ""
-authors = ["Richard Sarkis <rich@sark.is>"]
+authors = [{ name = "Richard Sarkis", email = "rich@sark.is" }]
+requires-python = "~=3.9"
+dependencies = [
+    "pyobjc~=11.0",
+    "Pillow>=11.1.0,<12",
+    "requests>=2.32.3,<3",
+    "structlog>=25.1.0,<26",
+    "fake-useragent>=2.0.3,<3",
+    "python-dotenv>=1.0.1,<2",
+]
 
-[tool.poetry.dependencies]
-python = "^3.9"
-pyobjc = "^10.3.2"
-Pillow = "^11.0.0"
-requests = "^2.32.3"
-structlog = "^24.4.0"
-fake-useragent = "^2.0.1"
-python-dotenv = "^1.0.1"
-
-[tool.poetry.dev-dependencies]
+[dependency-groups]
+dev = []
 
 [build-system]
-requires = ["poetry-core>=1.0.0"]
-build-backend = "poetry.core.masonry.api"
+requires = ["hatchling"]
+build-backend = "hatchling.build"
