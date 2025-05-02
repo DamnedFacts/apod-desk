@@ -16,6 +16,5 @@ dependencies = [
 [dependency-groups]
 dev = []
 
-[build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+[project.scripts]
+apod-desk = "apod_desk:main"
