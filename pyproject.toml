@@ -6,7 +6,7 @@ authors = [{ name = "Richard Sarkis", email = "rich@sark.is" }]
 requires-python = "~=3.9"
 dependencies = [
     "pyobjc~=11.0",
-    "Pillow>=11.1.0,<12",
+    "pillow>=11.1.0,<12",
     "requests>=2.32.3,<3",
     "structlog>=25.1.0,<26",
     "fake-useragent>=2.0.3,<3",
