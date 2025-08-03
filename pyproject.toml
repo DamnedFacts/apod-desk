@@ -3,7 +3,7 @@ name = "apod"
 version = "0.1.0"
 description = ""
 authors = [{ name = "Richard Sarkis", email = "rich@sark.is" }]
-requires-python = "~=3.9"
+requires-python = ">=3.9.0, <3.14"
 dependencies = [
     "pyobjc~=11.0",
     "pillow>=11.1.0,<12",
