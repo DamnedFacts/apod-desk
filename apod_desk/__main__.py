@@ -95,6 +95,12 @@ def siginfo_handler(signum, frame):
     set_desktop_image_periodically(None, None)
 
 
+def sigint_handler(signum, frame):
+    log.info("SIGINT received, stopping event loop")
+    # Ensure we stop the Cocoa run loop cleanly on the main thread
+    AppHelper.callAfter(AppHelper.stopEventLoop)
+
+
 def construct_url(base, params):
     """Construct an APOD API URL"""
     url = base
@@ -544,6 +550,7 @@ def main():
     log = build_logger(name="apod_desk")
 
     signal.signal(signal.SIGINFO, siginfo_handler)
+    signal.signal(signal.SIGINT, sigint_handler)
 
     info = NSBundle.mainBundle().infoDictionary()
     info["LSBackgroundOnly"] = "1"
