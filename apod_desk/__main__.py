@@ -30,15 +30,17 @@ from AppKit import (
     NSWorkspace,
     NSWorkspaceActiveSpaceDidChangeNotification,
 )
-from Foundation import NSURL
+from Foundation import NSURL, NSOperationQueue, NSBlockOperation
 from PIL import Image, ImageFont, ImageDraw, ImageStat, ImageOps, ImageFilter
 from PyObjCTools import AppHelper
+import objc
 
 # Global to store image file paths
 last_pic_files: Dict[int, Dict[str, Any]] = {}
 
 # Keep a strong reference to the observer for the app lifetime
 observer = None
+controller = None
 
 args = None
 log = None
@@ -458,6 +460,7 @@ def _fetch_and_set_apod_image_once() -> APODResult:
                 )
                 log.info("Pausing for before next image.", sleep_time=sleep_t)
                 return APODResult.SUCCESS
+            return APODResult.HTTP_NON_SUCCESS
         else:
             log.warn(
                 "An unexpected server response was received",
@@ -490,10 +493,67 @@ def _fetch_and_set_apod_image_once() -> APODResult:
 
 
 def set_desktop_image_periodically(obj, notification):
-    """Schedule APOD fetch on a background thread and return immediately."""
-    threading.Thread(target=_fetch_and_set_apod_image_once, daemon=True).start()
+    """Request a (re)fetch via the APODController without blocking."""
+    global controller
+    if controller is not None:
+        controller.scheduleFetchImmediately()
+    else:
+        threading.Thread(target=_fetch_and_set_apod_image_once, daemon=True).start()
     return None
 
+
+class APODController(NSObject):
+    """Cocoa-based orchestrator for background fetch, retry, and scheduling."""
+
+    def init(self):
+        self = objc.super(APODController, self).init()
+        if self is None:
+            return None
+        self.operationQueue = NSOperationQueue.alloc().init()
+        self.operationQueue.setMaxConcurrentOperationCount_(1)
+        self.inFlight = False
+        self.backoffSeconds = 2.0
+        return self
+
+    def scheduleFetchImmediately(self):
+        if getattr(self, "inFlight", False):
+            return
+        self.inFlight = True
+        op = NSBlockOperation.blockOperationWithBlock_(self._fetchOpBlock)
+        self.operationQueue.addOperation_(op)
+
+    def _fetchOpBlock(self):
+        try:
+            result = _fetch_and_set_apod_image_once()
+            code = int(result.value)
+        except Exception:
+            code = int(APODResult.UNEXPECTED_ERROR.value)
+        self.performSelectorOnMainThread_withObject_waitUntilDone_(
+            "handleFetchResult:", code, False
+        )
+
+    def handleFetchResult_(self, code):
+        self.inFlight = False
+        try:
+            result = APODResult(int(code))
+        except Exception:
+            result = APODResult.UNEXPECTED_ERROR
+        if result == APODResult.SUCCESS:
+            self.backoffSeconds = 2.0
+            NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
+                sleep_t, self, "nextCycleTimerFired:", None, False
+            )
+        else:
+            self.backoffSeconds = min(10.0, max(2.0, self.backoffSeconds * 1.5))
+            NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
+                self.backoffSeconds, self, "retryTimerFired:", None, False
+            )
+
+    def nextCycleTimerFired_(self, _timer):
+        self.scheduleFetchImmediately()
+
+    def retryTimerFired_(self, _timer):
+        self.scheduleFetchImmediately()
 
 def set_desktop_image_by_notification(obj, notification):
     log.info("Space change detected")
@@ -506,7 +566,7 @@ def set_desktop_image_by_notification(obj, notification):
 
 
 def main():
-    global args, log, NASA_API_KEY, observer
+    global args, log, NASA_API_KEY, observer, controller
 
     # Define command-line arguments
     parser = argparse.ArgumentParser(description="NASA APOD Desktop")
@@ -570,10 +630,8 @@ def main():
         None,
     )
 
+    controller = APODController.alloc().init()
     obsrv.getAndSetNewDesktop_(None)
-    NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
-        sleep_t, obsrv, "getAndSetNewDesktop:", None, True
-    )
 
     AppHelper.runEventLoop()
 
