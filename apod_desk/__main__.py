@@ -575,8 +575,7 @@ def main():
         sleep_t, obsrv, "getAndSetNewDesktop:", None, True
     )
 
-    # AppHelper.runEventLoop()
-    AppHelper.runEventLoop(installInterrupt=True)
+    AppHelper.runEventLoop()
 
 
 if __name__ == "__main__":
