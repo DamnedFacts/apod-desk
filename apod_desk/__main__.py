@@ -2,7 +2,6 @@
 
 """Astronomy Picture of the Day Mac Desktop Setter."""
 
-
 import argparse
 import json
 import logging
@@ -21,6 +20,7 @@ from fake_useragent import UserAgent
 import requests
 import structlog
 from structlog import wrap_logger
+import threading
 from AppKit import (
     NSApplication,
     NSBundle,
@@ -28,6 +28,7 @@ from AppKit import (
     NSScreen,
     NSTimer,
     NSWorkspace,
+    NSWorkspaceActiveSpaceDidChangeNotification,
 )
 from Foundation import NSURL
 from PIL import Image, ImageFont, ImageDraw, ImageStat, ImageOps, ImageFilter
@@ -36,11 +37,15 @@ from PyObjCTools import AppHelper
 # Global to store image file paths
 last_pic_files: Dict[int, Dict[str, Any]] = {}
 
+# Keep a strong reference to the observer for the app lifetime
+observer = None
+
 args = None
 log = None
 sleep_t = 600
 ua = UserAgent()
 NASA_API_KEY = ""
+
 
 class APODResult(Enum):
     SUCCESS = 0
@@ -48,25 +53,13 @@ class APODResult(Enum):
     HTTP_CONNECTION_ERROR = 12
     UNEXPECTED_ERROR = 100
 
-def retry_after_delay(delay, retry_function, *args, **kwargs):
-    def retry_wrapper():
-        retry_function(*args, **kwargs)
-
-    # Offload to a background thread with delay
-    objc.dispatch_after(
-        objc.dispatch_time(0, delay * 1_000_000_000),
-        objc.dispatch_get_global_queue(0, 0),
-        retry_wrapper
-    )
 
 def build_logger(tty=True, name=__name__):
     logging.basicConfig(format="%(message)s", stream=sys.stdout, level=logging.INFO)
 
     def logger_factory():
         logger = logging.getLogger(name)
-        logger.setLevel(
-            os.getenv("LOGLEVEL", logging.getLevelName(logging.INFO))
-        )
+        logger.setLevel(os.getenv("LOGLEVEL", logging.getLevelName(logging.INFO)))
         return logger
 
     processors = [
@@ -113,7 +106,9 @@ def construct_url(base, params):
     return url
 
 
-def set_desktop_image_cocoa(img_file: str, screen: Any, options: Dict[str, Any] | None = None) -> None:
+def set_desktop_image_cocoa(
+    img_file: str, screen: Any, options: Dict[str, Any] | None = None
+) -> None:
     if not options:
         options = {}
 
@@ -141,12 +136,20 @@ def set_desktop_image(img: Image, img_desc: str) -> None:
         sc_width, sc_height = screen.frame().size.width, screen.frame().size.height
         (im_width, im_height) = img.size
 
-        log.info("Scaling image for display id", screen_id=screen_id,
-                 width=sc_width, height=sc_height)
+        log.info(
+            "Scaling image for display id",
+            screen_id=screen_id,
+            width=sc_width,
+            height=sc_height,
+        )
 
         fills_width = fills_height = False
 
-        if ('resize_to_fit' in args and args.resize_to_fit) or 'mirror_blur' in args or 'color_avg' in args:
+        if (
+            ("resize_to_fit" in args and args.resize_to_fit)
+            or "mirror_blur" in args
+            or "color_avg" in args
+        ):
             if im_width / im_height > sc_width / sc_height:
                 # Image aspect ratio is wider than the screen's aspect ratio
                 ratio = sc_width / im_width
@@ -160,55 +163,62 @@ def set_desktop_image(img: Image, img_desc: str) -> None:
 
         try:
             img_2 = img.resize(
-                (int(im_width * ratio), int(im_height * ratio)), resample=Image.Resampling.LANCZOS)
+                (int(im_width * ratio), int(im_height * ratio)),
+                resample=Image.Resampling.LANCZOS,
+            )
         except OSError as e:
             log.error("Encountered exception", exc=str(e).strip())
             return
 
         new_w = img_2.size[0]
         new_h = img_2.size[1]
-        log.info("Image dimensions scaled",
-                 ratio=ratio, width=new_w, height=new_h)
+        log.info("Image dimensions scaled", ratio=ratio, width=new_w, height=new_h)
 
         final_img = Image.new("RGB", (int(sc_width), int(sc_height)))
 
         edge_boxes_and_positions = []
-        if 'color_avg' in args:
+        if "color_avg" in args:
             edge_width = int(min(new_w, new_h) * args.color_avg)
             if not fills_height:
-                edge_boxes_and_positions.extend([
-                    ((0, 0, new_w, edge_width), "top"),
-                    ((0, new_h - edge_width, new_w, new_h), "bottom")
-                ])
+                edge_boxes_and_positions.extend(
+                    [
+                        ((0, 0, new_w, edge_width), "top"),
+                        ((0, new_h - edge_width, new_w, new_h), "bottom"),
+                    ]
+                )
             if not fills_width:
-                edge_boxes_and_positions.extend([
-                    ((0, 0, edge_width, new_h), "left"),
-                    ((new_w - edge_width, 0, new_w, new_h), "right")
-                ])
-        elif 'mirror_blur' in args and args.mirror_blur:
-            edge_width = (int(sc_height) -
-                          new_h) // 2 if not fills_height else 0
-            edge_height = (int(sc_width) -
-                           new_w) // 2 if not fills_width else 0
+                edge_boxes_and_positions.extend(
+                    [
+                        ((0, 0, edge_width, new_h), "left"),
+                        ((new_w - edge_width, 0, new_w, new_h), "right"),
+                    ]
+                )
+        elif "mirror_blur" in args and args.mirror_blur:
+            edge_width = (int(sc_height) - new_h) // 2 if not fills_height else 0
+            edge_height = (int(sc_width) - new_w) // 2 if not fills_width else 0
             if edge_width > 0:
-                edge_boxes_and_positions.extend([
-                    ((0, 0, new_w, edge_width), "top"),
-                    ((0, new_h - edge_width, new_w, new_h), "bottom")
-                ])
+                edge_boxes_and_positions.extend(
+                    [
+                        ((0, 0, new_w, edge_width), "top"),
+                        ((0, new_h - edge_width, new_w, new_h), "bottom"),
+                    ]
+                )
             if edge_height > 0:
-                edge_boxes_and_positions.extend([
-                    ((0, 0, edge_height, new_h), "left"),
-                    ((new_w - edge_height, 0, new_w, new_h), "right")
-                ])
+                edge_boxes_and_positions.extend(
+                    [
+                        ((0, 0, edge_height, new_h), "left"),
+                        ((new_w - edge_height, 0, new_w, new_h), "right"),
+                    ]
+                )
 
         draw = ImageDraw.Draw(final_img)
 
         for box, position in edge_boxes_and_positions:
-            if 'color_avg' in args:
+            if "color_avg" in args:
                 edge_img = img_2.crop(box)
                 avg_color = ImageStat.Stat(edge_img).mean
                 avg_color = tuple(map(int, avg_color))
-            elif 'mirror_blur' in args and args.mirror_blur:
+            elif "mirror_blur" in args and args.mirror_blur:
                 edge_img = img_2.crop(box)
                 if position in ["top", "bottom"]:
                     edge_img = ImageOps.flip(edge_img)
@@ -217,39 +227,60 @@ def set_desktop_image(img: Image, img_desc: str) -> None:
                 edge_img = edge_img.filter(ImageFilter.GaussianBlur(radius=50))
 
             if position == "top":
-                draw.rectangle([(0, 0), (int(sc_width), (int(
-                    sc_height) - new_h) // 2)], fill=avg_color if 'color_avg' in args else None)
-                if 'mirror_blur' in args and args.mirror_blur:
+                draw.rectangle(
+                    [(0, 0), (int(sc_width), (int(sc_height) - new_h) // 2)],
+                    fill=avg_color if "color_avg" in args else None,
+                )
+                if "mirror_blur" in args and args.mirror_blur:
                     final_img.paste(edge_img, (0, 0))
             elif position == "bottom":
-                draw.rectangle([(0, int(sc_height) + (int(sc_height) - new_h) // 2), (int(
-                    sc_width), int(sc_height))], fill=avg_color if 'color_avg' in args else None)
-                if 'mirror_blur' in args and args.mirror_blur:
+                draw.rectangle(
+                    [
+                        (0, int(sc_height) + (int(sc_height) - new_h) // 2),
+                        (int(sc_width), int(sc_height)),
+                    ],
+                    fill=avg_color if "color_avg" in args else None,
+                )
+                if "mirror_blur" in args and args.mirror_blur:
                     final_img.paste(edge_img, (0, int(sc_height) - edge_width))
             elif position == "left":
-                draw.rectangle([(0, 0), ((int(sc_width) - new_w) // 2, int(sc_height))],
-                               fill=avg_color if 'color_avg' in args else None)
-                if 'mirror_blur' in args and args.mirror_blur:
+                draw.rectangle(
+                    [(0, 0), ((int(sc_width) - new_w) // 2, int(sc_height))],
+                    fill=avg_color if "color_avg" in args else None,
+                )
+                if "mirror_blur" in args and args.mirror_blur:
                     final_img.paste(edge_img, (0, 0))
             elif position == "right":
-                draw.rectangle([((int(sc_width) + new_w) // 2, 0), (int(sc_width),
-                               int(sc_height))], fill=avg_color if 'color_avg' in args else None)
-                if 'mirror_blur' in args and args.mirror_blur:
-                    final_img.paste(
-                        edge_img, ((int(sc_width) + new_w) // 2, 0))
+                draw.rectangle(
+                    [
+                        ((int(sc_width) + new_w) // 2, 0),
+                        (int(sc_width), int(sc_height)),
+                    ],
+                    fill=avg_color if "color_avg" in args else None,
+                )
+                if "mirror_blur" in args and args.mirror_blur:
+                    final_img.paste(edge_img, ((int(sc_width) + new_w) // 2, 0))
 
-        final_img.paste(img_2, ((int(sc_width) - new_w) //
-                        2, (int(sc_height) - new_h) // 2))
+        final_img.paste(
+            img_2, ((int(sc_width) - new_w) // 2, (int(sc_height) - new_h) // 2)
+        )
 
         draw = ImageDraw.Draw(final_img)
-        draw.text((new_w * 0.05, new_h * 0.95), img_desc, font=times_font,
-                  fill="rgb(255, 255, 255)", stroke_width=2, stroke_fill="black")
+        draw.text(
+            (new_w * 0.05, new_h * 0.95),
+            img_desc,
+            font=times_font,
+            fill="rgb(255, 255, 255)",
+            stroke_width=2,
+            stroke_fill="black",
+        )
 
         img_file = NamedTemporaryFile(suffix="*.png", delete=True)
         final_img.convert("RGB").save(img_file, format="PNG")  # for CYMK
         img_file.flush()
 
-        set_desktop_image_cocoa(img_file.name, screen, options)
+        # Ensure Cocoa call happens on the main thread
+        AppHelper.callAfter(set_desktop_image_cocoa, img_file.name, screen, options)
 
         img_files[screen_id] = {
             "file": img_file,
@@ -267,9 +298,7 @@ def set_desktop_image(img: Image, img_desc: str) -> None:
 
 
 def retrieve_image(img_url, img_desc):
-    headers = {
-        'User-Agent': ua.random
-    }
+    headers = {"User-Agent": ua.random}
 
     try:
         r = requests.head(img_url, headers=headers, timeout=30)
@@ -307,10 +336,7 @@ def retrieve_image(img_url, img_desc):
     Image.LOAD_TRUNCATED_IMAGES = True
 
     while len(image_data) <= c_len:
-        headers = {
-            "Range": f"bytes={start}-{end}",
-            'User-Agent': ua.random
-        }
+        headers = {"Range": f"bytes={start}-{end}", "User-Agent": ua.random}
         log.debug(headers)
         try:
             r_img = requests.get(img_url, headers=headers, timeout=30)
@@ -318,9 +344,7 @@ def retrieve_image(img_url, img_desc):
             requests.exceptions.ContentDecodingError,
             requests.exceptions.ChunkedEncodingError,
         ):
-            log.warn(
-                "Error decoding content from server. Skipping", url=img_url
-            )
+            log.warn("Error decoding content from server. Skipping", url=img_url)
             return False
         except requests.exceptions.ReadTimeout:
             log.warn("Read timeout. Skipping.", url=img_url)
@@ -357,20 +381,18 @@ def retrieve_image(img_url, img_desc):
             start = end + 1
             end += inc if inc <= (c_len - 1) else (c_len - 1)
             retry -= 1
-        except (UserWarning, Image.DecompressionBombError,
-                requests.exceptions.RequestException) as e:
+        except (
+            UserWarning,
+            Image.DecompressionBombError,
+            requests.exceptions.RequestException,
+        ) as e:
             log.error("Image retrieval failure", err=str(e))
             return False
         else:
             start = end + 1
             end = c_len - 1
-            log.info(
-                "Retrieving remainder of image data", start=start, end=end
-            )
-            headers = {
-                "Range": f"bytes={start}-{end}",
-                'User-Agent': ua.random
-            }
+            log.info("Retrieving remainder of image data", start=start, end=end)
+            headers = {"Range": f"bytes={start}-{end}", "User-Agent": ua.random}
             r_img = requests.get(img_url, headers=headers, timeout=30)
             image_data += r_img.content
             img = Image.open(BytesIO(image_data))
@@ -398,75 +420,73 @@ def retrieve_image(img_url, img_desc):
     return True
 
 
-def set_desktop_image_periodically(obj, notification):
-    """
-    Sets the desktop image for all screens.
-
-    Parameters:
-    img (PIL.Image): The image to set as the desktop image.
-    img_desc (str): The description to draw on the image.
-    font_path (str): The path to the font to use for the description text. Default is "Times.ttc".
-    font_size (int): The font size to use for the description text. Default is 22.
-    """
-
+def _fetch_and_set_apod_image_once() -> APODResult:
+    """Fetch one APOD image and set it. Runs on a background thread."""
     this_year = date.today().year
     base_url = "https://api.nasa.gov/planetary/apod"
 
-    while True:
-        log.info("-- MARK --")
+    log.info("-- MARK --")
 
-        url_params = [("api_key", NASA_API_KEY), ("hd", True)]
+    url_params = [("api_key", NASA_API_KEY), ("hd", True)]
 
-        year = randrange(1997, this_year + 1)
-        month = randrange(1, 13)
-        day = randrange(1, 31)
+    year = randrange(1997, this_year + 1)
+    month = randrange(1, 13)
+    day = randrange(1, 31)
 
-        date_param = ("date", f"{year}-{month:02d}-{day:02d}")
+    date_param = ("date", f"{year}-{month:02d}-{day:02d}")
 
-        url_params.append(date_param)
-        apod_url = construct_url(base_url, url_params)
-        try:
-            headers = {
-                'User-Agent': ua.random
-            }
-            response = requests.get(apod_url, headers=headers, timeout=30)
-            if response.status_code == 200:
-                apod = json.loads(response.text)
-                result = retrieve_image(apod["hdurl"], apod["title"])
-                if result:
-                    log.info(
-                        "Setting image",
-                        date=apod.get("date"),
-                        hdurl=apod.get("hdurl"),
-                        title=apod.get("title"),
-                    )
-                    log.info(
-                        "Pausing for before next image.", sleep_time=sleep_t
-                    )
-                    return APODResult.SUCCESS
-            elif response.status_code != 200:
-                log.warn("An unexpected server response was received",
-                         sleep=backoff_sleep, status_code=response.status_code,
-                         url=apod_url
-                         )
-                return APODResult.HTTP_NON_SUCCESS
-        except KeyError:
-            log.warn("No high definition image available, skipping.", url=apod_url)
-        except (
-            requests.exceptions.ConnectionError,
-            requests.exceptions.ReadTimeout,
-        ):
+    url_params.append(date_param)
+    apod_url = construct_url(base_url, url_params)
+    try:
+        headers = {"User-Agent": ua.random}
+        response = requests.get(apod_url, headers=headers, timeout=30)
+        if response.status_code == 200:
+            apod = json.loads(response.text)
+            result = retrieve_image(apod["hdurl"], apod["title"])
+            if result:
+                log.info(
+                    "Setting image",
+                    date=apod.get("date"),
+                    hdurl=apod.get("hdurl"),
+                    title=apod.get("title"),
+                )
+                log.info("Pausing for before next image.", sleep_time=sleep_t)
+                return APODResult.SUCCESS
+        else:
             log.warn(
-                "Conection error, or timeout, sleeping before retry",
-                sleep=sleep_t, url=apod_url
+                "An unexpected server response was received",
+                sleep=sleep_t,
+                status_code=response.status_code,
+                url=apod_url,
             )
-            return APODResult.HTTP_CONNECTION_ERROR
-        except Exception as e:
-            log.warn(
-                f"Unhandled exception occurred, sleeping before retry",
-                sleep=sleep_t, url=apod_url, exc=e
-            )
-            return APODResult.UNEXPECTED_ERROR
+            return APODResult.HTTP_NON_SUCCESS
+    except KeyError:
+        log.warn("No high definition image available, skipping.", url=apod_url)
+        return APODResult.UNEXPECTED_ERROR
+    except (
+        requests.exceptions.ConnectionError,
+        requests.exceptions.ReadTimeout,
+    ):
+        log.warn(
+            "Conection error, or timeout, sleeping before retry",
+            sleep=sleep_t,
+            url=apod_url,
+        )
+        return APODResult.HTTP_CONNECTION_ERROR
+    except Exception as e:
+        log.warn(
+            f"Unhandled exception occurred, sleeping before retry",
+            sleep=sleep_t,
+            url=apod_url,
+            exc=e,
+        )
+        return APODResult.UNEXPECTED_ERROR
+
+
+def set_desktop_image_periodically(obj, notification):
+    """Schedule APOD fetch on a background thread and return immediately."""
+    threading.Thread(target=_fetch_and_set_apod_image_once, daemon=True).start()
+    return None
 
 
 def set_desktop_image_by_notification(obj, notification):
@@ -474,35 +494,42 @@ def set_desktop_image_by_notification(obj, notification):
     for screen in NSScreen.screens():
         screen_id = screen.deviceDescription()["NSScreenNumber"]
         if screen_id in last_pic_files:
-            set_desktop_image_cocoa(
-                last_pic_files[screen_id]["file"].name, screen)
+            set_desktop_image_cocoa(last_pic_files[screen_id]["file"].name, screen)
         else:
             set_desktop_image_periodically(None, None)
 
 
 def main():
-    global args, log, NASA_API_KEY
+    global args, log, NASA_API_KEY, observer
 
     # Define command-line arguments
-    parser = argparse.ArgumentParser(description='NASA APOD Desktop')
+    parser = argparse.ArgumentParser(description="NASA APOD Desktop")
     group = parser.add_mutually_exclusive_group()
-    group.add_argument('--color_avg',
-                       type=float,
-                       nargs='?',
-                       const=0.1,
-                       default=argparse.SUPPRESS,
-                       help=('Enable color averaging with an optional value '
-                             'that represents the percent of the image from '
-                             'the image edge to use for color averaging. '
-                             'Default value if no value is provided is 10%'))
-    group.add_argument('--mirror_blur',
-                       action='store_true',
-                       help='Enable mirroring and blurring of the image for the bars')
-    parser.add_argument('--resize_to_fit',
-                        action='store_true',
-                        help='Enable resize-to-fit of the image such that the '
-                             'longest dimension is proportionally shrunk to '
-                             'fit within the screen\'s resolution')
+    group.add_argument(
+        "--color_avg",
+        type=float,
+        nargs="?",
+        const=0.1,
+        default=argparse.SUPPRESS,
+        help=(
+            "Enable color averaging with an optional value "
+            "that represents the percent of the image from "
+            "the image edge to use for color averaging. "
+            "Default value if no value is provided is 10%"
+        ),
+    )
+    group.add_argument(
+        "--mirror_blur",
+        action="store_true",
+        help="Enable mirroring and blurring of the image for the bars",
+    )
+    parser.add_argument(
+        "--resize_to_fit",
+        action="store_true",
+        help="Enable resize-to-fit of the image such that the "
+        "longest dimension is proportionally shrunk to "
+        "fit within the screen's resolution",
+    )
 
     # Parse the command-line arguments
     args = parser.parse_args()
@@ -527,21 +554,22 @@ def main():
     _cls.getAndSetNewDesktop_ = set_desktop_image_periodically
 
     obsrv = _cls.new()
+    observer = obsrv
 
     NSWorkspace.sharedWorkspace().notificationCenter().addObserver_selector_name_object_(
         obsrv,
         "spaceDidChange:",
-        "NSWorkspaceActiveSpaceDidChangeNotification",
+        NSWorkspaceActiveSpaceDidChangeNotification,
         None,
     )
 
     obsrv.getAndSetNewDesktop_(None)
     NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
-        sleep_t, obsrv, obsrv.getAndSetNewDesktop_, None, True
+        sleep_t, obsrv, "getAndSetNewDesktop:", None, True
     )
 
     # AppHelper.runEventLoop()
-    AppHelper.runConsoleEventLoop(installInterrupt=True)
+    AppHelper.runEventLoop(installInterrupt=True)
 
 
 if __name__ == "__main__":
