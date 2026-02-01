@@ -12,8 +12,8 @@ import time
 from datetime import date
 from io import BytesIO
 from enum import Enum
+from pathlib import Path
 from random import randrange
-from tempfile import NamedTemporaryFile
 from dotenv import load_dotenv
 from typing import Dict, Any, List
 from fake_useragent import UserAgent
@@ -47,6 +47,48 @@ log = None
 sleep_t = 600
 ua = UserAgent()
 NASA_API_KEY = ""
+
+# Fixed wallpaper directory to avoid macOS cache bloat
+WALLPAPER_DIR = Path.home() / ".apod_desk" / "wallpapers"
+
+
+def get_wallpaper_path(screen_id: int) -> Path:
+    """Get a wallpaper path for a given screen ID, alternating between two slots.
+    
+    macOS caches wallpapers by URL and may ignore content changes to the same file.
+    Alternating between two filenames forces macOS to recognize the change while
+    limiting cache entries to 2 per screen (instead of unbounded with timestamps).
+    """
+    WALLPAPER_DIR.mkdir(parents=True, exist_ok=True)
+    
+    slot_a = WALLPAPER_DIR / f"wallpaper_screen_{screen_id}_a.png"
+    slot_b = WALLPAPER_DIR / f"wallpaper_screen_{screen_id}_b.png"
+    
+    # Use whichever slot is older (or doesn't exist)
+    if not slot_a.exists():
+        return slot_a
+    if not slot_b.exists():
+        return slot_b
+    
+    # Both exist — use the older one (will be overwritten)
+    if slot_a.stat().st_mtime <= slot_b.stat().st_mtime:
+        return slot_a
+    return slot_b
+
+
+def get_min_screen_dimensions() -> tuple[int, int]:
+    """Get the minimum width and height across all active screens.
+    
+    Handles clamshell mode automatically since closed displays
+    are not included in NSScreen.screens().
+    """
+    screens = NSScreen.screens()
+    if not screens:
+        return (1920, 1080)  # Sensible fallback
+    
+    min_width = min(int(screen.frame().size.width) for screen in screens)
+    min_height = min(int(screen.frame().size.height) for screen in screens)
+    return (min_width, min_height)
 
 
 class APODResult(Enum):
@@ -120,7 +162,13 @@ def set_desktop_image_cocoa(
     if not options:
         options = {}
 
+    # Verify file exists before attempting to set
+    if not Path(img_file).exists():
+        log.error("Wallpaper file does not exist", img=img_file)
+        return
+
     file_url = NSURL.fileURLWithPath_(img_file)
+    screen_id = screen.deviceDescription()["NSScreenNumber"]
 
     # tell the workspace to set the desktop picture
     (
@@ -130,7 +178,20 @@ def set_desktop_image_cocoa(
         file_url, screen, options, None
     )
     if error:
-        log.error(error, img=img_file, screen=screen)
+        log.error(
+            "Failed to set desktop image",
+            error=str(error),
+            img=img_file,
+            screen_id=screen_id,
+        )
+    elif not result:
+        log.error(
+            "setDesktopImageURL returned False without error",
+            img=img_file,
+            screen_id=screen_id,
+        )
+    else:
+        log.info("Desktop image set successfully", screen_id=screen_id, img=img_file)
 
 
 def set_desktop_image(img: Image, img_desc: str) -> None:
@@ -283,24 +344,18 @@ def set_desktop_image(img: Image, img_desc: str) -> None:
             stroke_fill="black",
         )
 
-        img_file = NamedTemporaryFile(suffix="*.png", delete=True)
-        final_img.convert("RGB").save(img_file, format="PNG")  # for CYMK
-        img_file.flush()
+        # Use fixed path per screen to help macOS reuse wallpaper cache entries
+        img_path = get_wallpaper_path(screen_id)
+        final_img.convert("RGB").save(img_path, format="PNG")  # for CMYK
 
         # Ensure Cocoa call happens on the main thread
-        AppHelper.callAfter(set_desktop_image_cocoa, img_file.name, screen, options)
+        AppHelper.callAfter(set_desktop_image_cocoa, str(img_path), screen, options)
 
         img_files[screen_id] = {
-            "file": img_file,
+            "path": img_path,
             "img": final_img,
             "desc": img_desc,
         }
-
-    for screen_id in list(last_pic_files):
-        pic = last_pic_files[screen_id]
-        if pic["file"] and not pic["file"].closed:
-            pic["file"].close()
-        last_pic_files.pop(screen_id)
 
     last_pic_files.update(img_files)
 
@@ -397,6 +452,26 @@ def retrieve_image(img_url, img_desc):
             log.error("Image retrieval failure", err=str(e))
             return False
         else:
+            # Dimensions identified — check size BEFORE downloading the rest
+            (width, height) = img.size
+            min_screen_w, min_screen_h = get_min_screen_dimensions()
+            scale = args.min_scale
+            min_w_threshold = int(min_screen_w * scale)
+            min_h_threshold = int(min_screen_h * scale)
+
+            if width < min_w_threshold or height < min_h_threshold:
+                log.warn(
+                    "Image is too small for displays, skipping download",
+                    width=width,
+                    height=height,
+                    min_screen=f"{min_screen_w}x{min_screen_h}",
+                    threshold=f"{min_w_threshold}x{min_h_threshold}",
+                    bytes_downloaded=len(image_data),
+                    bytes_total=c_len,
+                )
+                return False
+
+            # Image is large enough — fetch the remainder
             start = end + 1
             end = c_len - 1
             log.info("Retrieving remainder of image data", start=start, end=end)
@@ -409,20 +484,12 @@ def retrieve_image(img_url, img_desc):
     (width, height) = img.size
     if len(image_data) == c_len:
         log.info(
-            "Got whole image and image is big enough",
+            "Got whole image",
             width=width,
             height=height,
             len_image_data=len(image_data),
             c_len=c_len,
         )
-
-    if height < 2000 or width < 2000:
-        log.warn(
-            "Image is too small, move on",
-            width=width,
-            height=height,
-        )
-        return False
 
     set_desktop_image(img, img_desc)
     return True
@@ -560,7 +627,7 @@ def set_desktop_image_by_notification(obj, notification):
     for screen in NSScreen.screens():
         screen_id = screen.deviceDescription()["NSScreenNumber"]
         if screen_id in last_pic_files:
-            set_desktop_image_cocoa(last_pic_files[screen_id]["file"].name, screen)
+            set_desktop_image_cocoa(str(last_pic_files[screen_id]["path"]), screen)
         else:
             set_desktop_image_periodically(None, None)
 
@@ -595,6 +662,14 @@ def main():
         help="Enable resize-to-fit of the image such that the "
         "longest dimension is proportionally shrunk to "
         "fit within the screen's resolution",
+    )
+    parser.add_argument(
+        "--min_scale",
+        type=float,
+        default=0.7,
+        help="Minimum image size as a fraction of the smallest active screen's "
+        "dimensions. Images smaller than this threshold are skipped. "
+        "Default: 0.7 (70%%)",
     )
 
     # Parse the command-line arguments
